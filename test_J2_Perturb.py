@@ -29,6 +29,9 @@ if __name__ == '__main__':
     # ISS
     op0 = OP(t.tle2coes('.\SatData\ISS.txt'),tspan,dt,coes=True,degree=False,perts=perts)
 
-    op0.plot_3d(show_body=False,show_plot=True)
+    # op0.plot_3d(show_body=False,show_plot=True)
+    op0.calculate_coes(print_results=True)
+
+    
 
     # t.plot_n_orbits([op0.rs],labels=[op0.name],colors=['b','r','g'],show_plot=True,show_body=False)

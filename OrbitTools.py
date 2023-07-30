@@ -7,6 +7,10 @@ import math as m
 import datetime
 
 D2R = np.pi/180
+R2D = 180/np.pi
+
+def norm(v):
+    return np.linalg.norm(v)
 
 def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False,save_plot=False,title="Many Orbits",set_pad=10,show_body=True):
 
@@ -120,6 +124,50 @@ def coes2rv(coes, deg=False, mu=pd.earth['mu']):
     v = np.dot(perif2eci, v_perif)
 
     return r,v,name
+
+# Converts r and v vectors to classical orbital elements
+def rv2coes(r,v,mu=pd.earth['mu'],deg=False,print_results=False):
+
+    r_norm = norm(r)
+
+    # Specific angular momentum
+    h = np.cross(r,v)
+    h_norm = norm(h)
+
+    i = m.acos(h[2]/h_norm) # inclination
+    e = ((norm(v)**2-mu/r_norm)*r - np.dot(r,v))/mu # Eccentricity vector
+    e_norm = norm(e)
+
+    N = np.cross([0,0,1],h) # Node line
+    N_norm = norm(N)
+
+    raan = m.acos(N[0]/N_norm) # Right ascension of ascending node
+    if N[1]<0: # To make it positive
+        raan = 2*np.pi - raan
+
+    aop = m.acos(np.dot(N,e)/N_norm/e_norm) # Argument of Perigee
+    if e[2]<0:
+        aop = 2*np.pi - aop
+
+    ta = m.acos(np.dot(e,r)/e_norm/r_norm) # True Anomaly
+    if np.dot(r,v)<0:
+        ta = 2*np.pi - ta
+    
+    a = r_norm * (1+e_norm*m.cos(ta))/(1-e_norm**2) # Semi-major Axis
+
+    if print_results:
+        print('a',a)
+        print('e',e_norm)
+        print('i',i*R2D)
+        print('RAAN',raan*R2D)
+        print('AOP',aop*R2D)
+        print('TA',ta*R2D)
+
+    if deg:
+        return [a,e_norm,i*R2D,ta*R2D,aop*R2D,raan*R2D]
+    else:
+        return [a,e_norm,i,ta,aop,raan]
+
 
 # inertial to perifocal rotation matrix
 def eci2perif(raan,aop,i): 
