@@ -6,35 +6,37 @@ from scipy.integrate import ode
 
 import PlanetaryData as pd
 import OrbitTools as t
+import AtmosphericTools as at
 
 def null_perts():
     return {
-        '32':False,
+        'oblateness':False,
         'aero':False,
         'moon_grav':False,
         'solar_grav':False,
     }
 
 class OrbitPropogator:
-    def __init__(self,state0,tspan,dt,coes=False,degree=True,cb=pd.earth,propogate=True,perts=null_perts()):
+    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts()):
         if coes:
-            self.r0, self.v0,self.name = t.coes2rv(state0,deg=degree,mu=cb['mu'])
+            self.r0, self.v0 = t.coes2rv(state0,deg=deg,mu=cb['mu'])
         else:
             self.r0 = state0[:3]
             self.v0 = state0[3:6]
-            self.name = state0[6]
+        
+        self.y0 = self.r0.tolist() + self.v0.tolist()
         self.tspan = tspan
         self.dt = dt 
         self.cb = cb
+        self.mass = mass0
 
         self.n_steps = int(np.ceil(self.tspan/self.dt))
 
-        self.ys = np.zeros((self.n_steps,6)) # 3D position, 3D velocity
-        self.ts = np.zeros((self.n_steps,1)) # time array
-
         # initial conditions
-        self.y0 = self.r0.tolist() + self.v0.tolist()
-        self.ys[0] = np.array(self.y0)
+        self.ts = np.zeros((self.n_steps,1)) # time array
+        self.ys = np.zeros((self.n_steps,6)) # 3D position, 3D velocity
+        self.ts[0] = 0
+        self.ys[0,:] = self.y0
         self.step = 1
 
         # initiate solver
@@ -48,9 +50,6 @@ class OrbitPropogator:
         if propogate:
             self.propogate_orbit()
     
-
-
-
     def propogate_orbit(self):
 
         while self.solver.successful() and self.step<self.n_steps:
@@ -61,38 +60,49 @@ class OrbitPropogator:
 
         self.rs=self.ys[:,:3]
         self.vs=self.ys[:,3:]
-
-
-
+        self.alts=(np.linalg.norm(self.rs,axis=1)-self.cb['radius']).reshape((self.step,1))
 
     def diffy_q(self,t,y):
         # unpack components from the "state" y
         rx, ry, rz, vx, vy, vz = y
         r = np.array([rx,ry,rz])
+        v = np.array([vx,vy,vz])
 
         # norm of radius vector
         norm_r = np.linalg.norm(r)
 
         # two-body acceleration
 
-        a = -r*self.cb['mu']/(norm_r**3) # this is a 3D vector
+        a = -r*self.cb['mu']/norm_r**3 # this is a 3D vector
 
-        if (self.perts['J2']):
+        # For J2 Perturbation
+        if (self.perts['oblateness']):
             z2 = r[2]**2
             r2 = norm_r**2
             tx = r[0]/norm_r * (5*z2/r2-1)
             ty = r[1]/norm_r * (5*z2/r2-1)
             tz = r[2]/norm_r * (5*z2/r2-3)
 
-            a_j2 = 1.5*self.cb['J2']*self.cb['mu']*self.cb['radius']**2/norm_r**4*np.array([tx,ty,tz])
+            a += 1.5*self.cb['J2']*self.cb['mu']*self.cb['radius']**2/norm_r**4*np.array([tx,ty,tz])
 
-            a += a_j2
+        # For aerodynamic drag
+        if self.perts['aero']:
+            # calculate altitude and air density
+            z = norm_r - self.cb['radius']
+            rho = at.calc_atmospheric_density(z)
+
+            # calculate motion of s/c with respect to a rotating atmosphere
+            v_rel = v - np.cross(self.cb['atm_rot_vector'],r)
+
+            a += -v_rel*0.5*rho*np.linalg.norm(v_rel)*self.perts['Cd']*self.perts['A']/self.mass
+
+            
+            
 
         
 
-        return [vx,vy,vz,a[0],a[1],a[2]]
-
-    
+        return [v[0],v[1],v[2],a[0],a[1],a[2]]
+  
     def calculate_coes(self,degree=True,print_results=False):
         print('Calculating COEs...')
 
@@ -101,7 +111,143 @@ class OrbitPropogator:
         for n in range(self.n_steps):
             self.coes[n,:] = t.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degree,print_results=print_results)
 
+    def plot_coes(self, hours=False, days=False, show_plot=False, save_plot=False, title='COEs',figsize=(20,10),dpi=500):
+        print("Plotting COEs...")
 
+        # Create figure and axes instances
+        fig,axs = plt.subplots(nrows=2,ncols=3,figsize=figsize)
+
+        # Figure Title
+        fig.suptitle(title,fontsize=20)
+        
+        # X axis
+        if hours:
+            ts = self.ts / 3600.0
+            xlabel = "Time Elapsed (hours)"
+        elif days:
+            ts = self.ts / 3600.0 / 24.0
+            xlabel = "Time Elapsed (days)"
+        else:
+            ts = self.ts
+            xlabel = "Time Elapsed (s)"
+        
+        # [a,e_norm,i*R2D,ta*R2D,aop*R2D,raan*R2D]
+
+        # Plot true anomaly
+        axs[0,0].plot(ts, self.coes[:,3])
+        axs[0,0].set_title("True Anomaly vs. Time")
+        axs[0,0].grid(True)
+        axs[0,0].set_ylabel("Angle (\u00B0)")
+        axs[0,0].set_xlabel(xlabel)
+
+        # Plot semi major axis
+        axs[1,0].plot(ts, self.coes[:,0])
+        axs[1,0].set_title("Semi-Major Axis vs. Time")
+        axs[1,0].grid(True)
+        axs[1,0].set_ylabel("Semi-Major Axis (km)")
+        axs[1,0].set_xlabel(xlabel)
+
+        # Plot Eccentricity
+        axs[0,1].plot(ts, self.coes[:,1])
+        axs[0,1].set_title("Eccentricity vs. Time")
+        axs[0,1].grid(True)
+        axs[0,1].set_ylabel("Eccentricity")
+        axs[0,1].set_xlabel(xlabel)
+
+        # Plot Argument of Periapse
+        axs[0,2].plot(ts, self.coes[:,4])
+        axs[0,2].set_title("Argument of Periapse vs. Time")
+        axs[0,2].grid(True)
+        axs[0,2].set_ylabel("Argument of Periapse (\u00B0)")
+        axs[0,2].set_xlabel(xlabel)
+
+        # Plot Inclination
+        axs[1,1].plot(ts, self.coes[:,2])
+        axs[1,1].set_title("Inclination vs. Time")
+        axs[1,1].grid(True)
+        axs[1,1].set_ylabel("Inclination (\u00B0)")
+        axs[1,1].set_xlabel(xlabel)
+
+        # Plot RAAN
+        axs[1,2].plot(ts, self.coes[:,5])
+        axs[1,2].set_title("RAAN vs. Time")
+        axs[1,2].grid(True)
+        axs[1,2].set_ylabel("RAAN (\u00B0)")
+        axs[1,2].set_xlabel(xlabel)
+
+        
+
+        if show_plot:
+            plt.show()
+        if save_plot:
+            plt.savefig(title+'.png',dpi=dpi) 
+
+    def calculate_apoapse_periapse(self):
+        # define empty arrays
+        self.apoapses = self.coes[:,0]*(1+self.coes[:,1])
+        self.periapses = self.coes[:,0]*(1-self.coes[:,1])
+
+    def plot_apoapse_periapse(self,  hours=False, days=False, show_plot=False, save_plot=False, title='Apoapse and Periapse',figsize=(20,10),dpi=500):
+
+        plt.figure(figsize=figsize)
+
+        # X axis
+        if hours:
+            ts = self.ts / 3600.0
+            xlabel = "Time Elapsed (hours)"
+        elif days:
+            ts = self.ts / 3600.0 / 24.0
+            xlabel = "Time Elapsed (days)"
+        else:
+            ts = self.ts
+            xlabel = "Time Elapsed (s)"
+        
+        # Plot each
+        plt.plot(ts, self.apoapses, 'b', label='Apoapse')
+        plt.plot(ts, self.apoapses, 'r', label='Periapse')
+
+        # labels
+        plt.ylabel("Altitude (km)")
+        plt.xlabel(xlabel)
+        
+        # other parameters
+        plt.grid(True)
+        plt.title(title)
+        plt.legend()
+
+        if show_plot:
+            plt.show()
+        if save_plot:
+            plt.savefig(title+'.png',dpi=dpi) 
+
+    # Plot altitude over time
+    def plot_alts(self,  hours=False, days=False, show_plot=False, save_plot=False, title='Radial Distance vs. Time',figsize=(20,10),dpi=500):
+
+        plt.figure(figsize=figsize)
+
+        # X axis
+        if hours:
+            ts = self.ts / 3600.0
+            xlabel = "Time Elapsed (hours)"
+        elif days:
+            ts = self.ts / 3600.0 / 24.0
+            xlabel = "Time Elapsed (days)"
+        else:
+            ts = self.ts
+            xlabel = "Time Elapsed (s)"
+        
+        plt.plot(ts,self.alts,'w')
+        plt.grid(True)
+        plt.ylabel("Altitude (km)")
+        plt.xlabel(xlabel)
+
+        plt.title(title)
+
+
+        if show_plot:
+            plt.show()
+        if save_plot:
+            plt.savefig(title+'.png',dpi=dpi) 
 
 
     def plot_3d(self,show_plot=False,save_plot=False,title="Test Title",set_pad=10,show_body=True):
@@ -123,7 +269,7 @@ class OrbitPropogator:
             _y = self.cb['radius']*np.sin(_u)*np.sin(_v)
             _z = self.cb['radius']*np.cos(_v)
 
-            ax.plot_surface(_x, _y, _z, cmap = "Blues")
+            ax.plot_surface(_x, _y, _z, cmap = "Blues",alpha=0.3)
 
         # plot trajectory and starting point
         ax.plot(self.rs[:,0], self.rs[:,1], self.rs[:,2], 'w', label = 'Trajectory')

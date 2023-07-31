@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import PlanetaryData as pd  
 import math as m
 import datetime
+import AtmosphericTools as at
 
 D2R = np.pi/180
 R2D = 180/np.pi
@@ -31,7 +32,7 @@ def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False
         _y = cb['radius']*np.sin(_u)*np.sin(_v)
         _z = cb['radius']*np.cos(_v)
 
-        ax.plot_surface(_x, _y, _z, cmap = "Blues")
+        ax.plot_surface(_x, _y, _z, cmap = "Blues",zorder=0.3,antialiased=False)
 
 
     # Defines labels
@@ -97,11 +98,10 @@ def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False
     if save_plot:
         plt.savefig(title+'.png',dpi=300) # 300 dots per inch
 
-
 # Converts classical orbital elements to r and v vectors
 def coes2rv(coes, deg=False, mu=pd.earth['mu']):
-    
-    a,e,i,ta,aop,raan,date,name=coes
+    print(len(coes))
+    a,e,i,ta,aop,raan = coes
     if deg:
         i*=D2R
         ta*=D2R
@@ -123,7 +123,7 @@ def coes2rv(coes, deg=False, mu=pd.earth['mu']):
     r = np.dot(perif2eci, r_perif)
     v = np.dot(perif2eci, v_perif)
 
-    return r,v,name
+    return r,v
 
 # Converts r and v vectors to classical orbital elements
 def rv2coes(r,v,mu=pd.earth['mu'],deg=False,print_results=False):
@@ -135,7 +135,7 @@ def rv2coes(r,v,mu=pd.earth['mu'],deg=False,print_results=False):
     h_norm = norm(h)
 
     i = m.acos(h[2]/h_norm) # inclination
-    e = ((norm(v)**2-mu/r_norm)*r - np.dot(r,v))/mu # Eccentricity vector
+    e = ((norm(v)**2-mu/r_norm)*r - np.dot(r,v)*v)/mu # Eccentricity vector
     e_norm = norm(e)
 
     N = np.cross([0,0,1],h) # Node line
@@ -168,14 +168,12 @@ def rv2coes(r,v,mu=pd.earth['mu'],deg=False,print_results=False):
     else:
         return [a,e_norm,i,ta,aop,raan]
 
-
 # inertial to perifocal rotation matrix
 def eci2perif(raan,aop,i): 
     row0 = [-m.sin(raan)*m.cos(i)*m.sin(aop) + m.cos(raan)*m.cos(aop), m.cos(raan)*m.cos(i)*m.sin(aop) + m.sin(raan)*m.cos(aop), m.sin(i)*m.sin(aop)]
     row1 = [-m.sin(raan)*m.cos(i)*m.cos(aop) - m.cos(raan)*m.sin(aop), m.cos(raan)*m.cos(i)*m.cos(aop) - m.sin(raan)*m.sin(aop), m.sin(i)*m.cos(aop)]
     row2 = [m.sin(raan)*m.sin(i), -m.cos(raan)*m.sin(i), m.cos(i)]
     return np.array([row0, row1, row2])
-
 
 # Calc eccentric anomaly (E)    
 def ecc_anomaly(arr, method, tol=1e-8):
@@ -205,11 +203,8 @@ def ecc_anomaly(arr, method, tol=1e-8):
     else:
         print("Invalid method for eccentric anomaly")
 
-
-
-
 # Takes text file containing TLE and returns classical orbital elements and a few other parameters
-def tle2coes(tle_filename, mu=pd.earth['mu']):
+def tle2coes(tle_filename, mu=pd.earth['mu'],deg = True,return_date=False):
     # read the file
     with open(tle_filename,'r') as f:
         lines = f.readlines()
@@ -238,8 +233,19 @@ def tle2coes(tle_filename, mu=pd.earth['mu']):
     E = ecc_anomaly([Me,e],'newton') # Eccentric Anomaly
     ta = true_anomaly([E,e]) # True Anomaly
 
+    if deg:
+        if return_date:
+            return a, e, i*R2D, ta*R2D, aop*R2D, raan*R2D,  [year,month,day,hour], name
+        else:
+            return a, e, i*R2D, ta*R2D, aop*R2D, raan*R2D
+        
+    else:
+        if return_date:  
+            return a, e, i, ta, aop, raan, [year,month,day,hour], name
+        else:
+            return a, e, i, ta, aop, raan
 
-    return a, e, i, ta, aop,raan, [year,month,day,hour], name
+    # return a, e, i, ta, aop,raan 
 
 # Calculates year, month, and date based off the epoch number in 2 Line Elements
 def calc_epoch(epoch):
