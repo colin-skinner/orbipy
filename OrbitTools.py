@@ -100,7 +100,6 @@ def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False
 
 # Converts classical orbital elements to r and v vectors
 def coes2rv(coes, deg=False, mu=pd.earth['mu']):
-    print(len(coes))
     a,e,i,ta,aop,raan = coes
     if deg:
         i*=D2R
@@ -132,8 +131,9 @@ def rv2coes(r,v,mu=pd.earth['mu'],deg=False,print_results=False):
 
     # Specific angular momentum
     h = np.cross(r,v)
+    # print("h:",h)
     h_norm = norm(h)
-
+    # print(h[2]/h_norm)
     i = m.acos(h[2]/h_norm) # inclination
     e = ((norm(v)**2-mu/r_norm)*r - np.dot(r,v)*v)/mu # Eccentricity vector
     e_norm = norm(e)
@@ -275,3 +275,15 @@ def true_anomaly(arr):
 
 def tle2rv(tle_filename):
     return coes2rv(tle2coes(tle_filename))
+
+
+
+def rv2period(r, v, mu = pd.earth['mu']):
+    # specific mechanical energy
+    epsilon = norm(v)**2/2.0 - mu/norm(r)
+
+    # semi major axis
+    a = -mu/(2.0*epsilon)
+
+    # period
+    return 2*np.pi*m.sqrt(a**3/mu)

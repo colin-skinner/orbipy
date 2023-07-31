@@ -8,13 +8,13 @@ plt.style.use('dark_background')
 from OrbitPropogator import OrbitPropogator as OP
 from OrbitPropogator import null_perts
 import PlanetaryData as pd
-import OrbitTools as t
+import OrbitTools as ot
 
 cb = pd.earth
 
-tspan = 3600*24*3
+tspan = 3600*24*3.0
 
-dt = 100.0
+dt = 10.0
 
 
 
@@ -51,7 +51,7 @@ if __name__ == '__main__':
     op = OP(state0, tspan, dt, deg=True, coes = True, mass0 = mass0, perts = perts)
     op.plot_alts(show_plot=True,hours=True)
     op.plot_3d(show_plot=True)
-    op.calculate_coes()
+    op.calculate_coes(print_results=False)
     op.plot_coes(show_plot=True,hours=True)
     op.calculate_apoapse_periapse()
     op.plot_apoapse_periapse(show_plot=True,hours=True)

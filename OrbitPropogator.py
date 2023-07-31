@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import ode
 
 import PlanetaryData as pd
-import OrbitTools as t
+import OrbitTools as ot
 import AtmosphericTools as at
 
 def null_perts():
@@ -19,7 +19,7 @@ def null_perts():
 class OrbitPropogator:
     def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts()):
         if coes:
-            self.r0, self.v0 = t.coes2rv(state0,deg=deg,mu=cb['mu'])
+            self.r0, self.v0 = ot.coes2rv(state0,deg=deg,mu=cb['mu'])
         else:
             self.r0 = state0[:3]
             self.v0 = state0[3:6]
@@ -29,6 +29,10 @@ class OrbitPropogator:
         self.dt = dt 
         self.cb = cb
         self.mass = mass0
+
+
+        if type(tspan)==str:
+            self.tspan = float(tspan)*ot.rv2period(self.r0,self.v0,self.cb)
 
         self.n_steps = int(np.ceil(self.tspan/self.dt))
 
@@ -60,7 +64,9 @@ class OrbitPropogator:
 
         self.rs=self.ys[:,:3]
         self.vs=self.ys[:,3:]
-        self.alts=(np.linalg.norm(self.rs,axis=1)-self.cb['radius']).reshape((self.step,1))
+        self.alts=(np.linalg.norm(self.rs,axis=1) - self.cb['radius']).reshape((self.n_steps,1))
+        # print(len(self.alts))
+        # self.alts
 
     def diffy_q(self,t,y):
         # unpack components from the "state" y
@@ -82,7 +88,7 @@ class OrbitPropogator:
             tx = r[0]/norm_r * (5*z2/r2-1)
             ty = r[1]/norm_r * (5*z2/r2-1)
             tz = r[2]/norm_r * (5*z2/r2-3)
-
+            
             a += 1.5*self.cb['J2']*self.cb['mu']*self.cb['radius']**2/norm_r**4*np.array([tx,ty,tz])
 
         # For aerodynamic drag
@@ -94,7 +100,9 @@ class OrbitPropogator:
             # calculate motion of s/c with respect to a rotating atmosphere
             v_rel = v - np.cross(self.cb['atm_rot_vector'],r)
 
-            a += -v_rel*0.5*rho*np.linalg.norm(v_rel)*self.perts['Cd']*self.perts['A']/self.mass
+            drag = -v_rel*0.5*rho*ot.norm(v_rel)*self.perts['Cd']*self.perts['A']/self.mass
+            
+            a+=drag
 
             
             
@@ -109,7 +117,7 @@ class OrbitPropogator:
         self.coes = np.zeros((self.n_steps,6))
 
         for n in range(self.n_steps):
-            self.coes[n,:] = t.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degree,print_results=print_results)
+            self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degree,print_results=print_results)
 
     def plot_coes(self, hours=False, days=False, show_plot=False, save_plot=False, title='COEs',figsize=(20,10),dpi=500):
         print("Plotting COEs...")
@@ -221,7 +229,7 @@ class OrbitPropogator:
             plt.savefig(title+'.png',dpi=dpi) 
 
     # Plot altitude over time
-    def plot_alts(self,  hours=False, days=False, show_plot=False, save_plot=False, title='Radial Distance vs. Time',figsize=(20,10),dpi=500):
+    def plot_alts(self, hours=False, days=False, show_plot=False, save_plot=False, title='Radial Distance vs. Time',figsize=(20,10),dpi=500):
 
         plt.figure(figsize=figsize)
 
@@ -269,11 +277,11 @@ class OrbitPropogator:
             _y = self.cb['radius']*np.sin(_u)*np.sin(_v)
             _z = self.cb['radius']*np.cos(_v)
 
-            ax.plot_surface(_x, _y, _z, cmap = "Blues",alpha=0.3)
+            ax.plot_surface(_x, _y, _z, cmap = "Blues",alpha=0.3,zorder=0)
 
         # plot trajectory and starting point
-        ax.plot(self.rs[:,0], self.rs[:,1], self.rs[:,2], 'w', label = 'Trajectory')
-        ax.plot([self.rs[0,0]], [self.rs[0,1]], [self.rs[0,2]], 'wo', label = 'Starting Position')
+        ax.plot(self.rs[:,0], self.rs[:,1], self.rs[:,2], 'w', label = 'Trajectory',zorder=10)
+        ax.plot([self.rs[0,0]], [self.rs[0,1]], [self.rs[0,2]], 'wo', label = 'Starting Position',zorder=10)
 
         # Coord System Origin
         l = self.cb['radius']*2.0
