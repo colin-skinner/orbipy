@@ -204,7 +204,7 @@ class OrbitPropogator:
         
         # Plot each
         plt.plot(ts, self.apoapses, 'b', label='Apoapse')
-        plt.plot(ts, self.apoapses, 'r', label='Periapse')
+        plt.plot(ts, self.periapses, 'r', label='Periapse')
 
         # labels
         plt.ylabel("Altitude (km)")
