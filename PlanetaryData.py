@@ -13,7 +13,9 @@ sun = {
     'mass' : 1.989e30, # kg
     'mu' : 1.989e30*G, # km^3/s^2
     'radius' : 695510.0, # km
-    # 'G1' : 10.0**8
+    'G1' : 10.0**8, # kg*km^3/s^2/m^2
+    'deorbit_altitude': 2*695510.0,
+    'spice_file' : 'C:\\Users\\mcmak\\Desktop\\Orbital Mechanics\\OMwithPython\\orbipy\\spice_data\\de432s.bsp'
 
 }
 
@@ -27,9 +29,24 @@ earth = {
     'mu' : 5.972e24*G, # km^3/s^2
     'radius' : 6378.0, # km
     'J2': 1.082635854e-3,
-    # 'spice_file' : 'ADD EVENTUALLY',
+    'spice_file' : 'C:\\Users\\mcmak\\Desktop\\Orbital Mechanics\\OMwithPython\\orbipy\\spice_data\\de432s.bsp',
     'zs' : earth_atm[:,0], # km
     'rhos' : earth_atm[:,1]*10**9, # kg/km^3
-    'atm_rot_vector' : np.array([0.0,0.0,72.9211e-6]) # rad/s
+    'atm_rot_vector' : np.array([0.0,0.0,72.9211e-6]), # rad/s
+    'deorbit_altitude': 10.0
+}
+
+luna = {
+
+    'name' : 'Moon',
+    'mass' : 7.34767309e22, # kg
+    'mu' : 7.34767309e22*G, # km^3/s^2
+    'radius' : 1737.1, # km
+    'orbit_T':29*day2sec + 12*3600.0 + 44*60 + 2.8, # days, hours, min, sec
+    'dist2earth': 384400.0,
+    'J2': 202.7e-6,
+    'spice_file' : 'C:\\Users\\mcmak\\Desktop\\Orbital Mechanics\\OMwithPython\\orbipy\\spice_data\\de432s.bsp'
 
 }
+
+luna['orbit_w'] = 2*np.pi/luna['orbit_T']

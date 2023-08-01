@@ -3,10 +3,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import ode
+from time import time as time
+from multiprocessing import Pool
+import spiceypy as spice
 
 import PlanetaryData as pd
 import OrbitTools as ot
 import AtmosphericTools as at
+import spice_tools as st
+import spice_data as sd
+
 
 def null_perts():
     return {
@@ -28,15 +34,17 @@ def null_perts():
         'relativity':0,
         'thrust':0,
         'thrust_direction':0,
+        'custom_thrust_function':0,
         'isp':0,
         'rho':0,
         'C20':0,
         'custom_pert':False
+
         
     }
 
 class OrbitPropogator:
-    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts(),prop_print=False,propagator='lsoda',sc={}):
+    def __init__(self,state0,tspan,dt,date0='2019-12-3',frame='J2000',mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts(),prop_print=False,propagator='lsoda',sc={}):
         # Check if initial state is classical orbital elements (COEs) or r and v vectors
         if coes:
             self.r0, self.v0 = ot.coes2rv(state0,deg=deg,mu=cb['mu'])
@@ -45,11 +53,14 @@ class OrbitPropogator:
             self.v0 = state0[3:6]
 
        
+        self.perts = perts # define perturbations dictionary
         self.tspan = tspan
         self.dt = dt 
         self.cb = cb
         self.mass0 = mass0
-
+        self.date0 = date0
+        self.propagator = propagator
+        self.frame = frame
 
         # Check if timespan is one period of custom amount of seconds
         if type(tspan)==str:
@@ -64,8 +75,8 @@ class OrbitPropogator:
         self.ts = np.zeros((self.n_steps+1,1)) # time array
         self.y = np.zeros((self.n_steps+1,7)) # 3D position, 3D velocity
         self.alts = np.zeros((self.n_steps+1))
-        self.propagator = propagator
         self.step = 0
+        self.spice_files_loaded = []
         
         # Initial Conditions
         self.y[0,:] = self.r0.tolist() + self.v0.tolist() + [self.mass0]
@@ -76,13 +87,10 @@ class OrbitPropogator:
         self.solver.set_integrator(propagator)
         self.solver.set_initial_value(self.y[0,:],0)
         
-        # define perturbations dictionary
-        self.perts = perts
 
         # store stop conditions dictionary
         self.stop_conditions_dict = sc
         
-        print(self.stop_conditions_dict)
         # define dictionary to map internal methods
         self.stop_conditions_map = {'max_alt':self.check_max_alt,'min_alt':self.check_min_alt}
 
@@ -93,6 +101,48 @@ class OrbitPropogator:
             if not key == 'deorbit_altitude':
                 self.stop_condition_functions.append(self.stop_conditions_map[key])
         
+        # Check if loading in spice data
+        if self.perts['n_bodies'] or self.perts['srp']:
+            # Load leapseconds kernel
+            # spice.furnsh(sd.leap_seconds_kernel)
+            spice.furnsh('.\spice_data\solar_system_kernal.mk')
+
+            # add to list of loaded spice files
+            # self.spice_files_loaded.append(sd.leap_seconds_kernel)
+            self.spice_files_loaded.append('.\spice_data\solar_system_kernal.mk')
+
+            # converts start date to seconds after J2000
+            self.start_time = spice.utc2et(self.date0)
+
+            # create timespan array in sec after J2000
+            self.spice_tspan = np.linspace(self.start_time, self.start_time + self.tspan, self.n_steps)
+
+            # if srp get states of sun
+
+            if self.perts['srp']:
+
+                spice.furnish(self.cb['spice_file'])
+                self.spice_files_loaded.append(self.cb['spice_file'])
+                self.cb['states'] = st.get_ephemeris_data(self.cb['name'],self.spice_tspan, self.frame,'SUN')
+
+            # Load kernels for each body
+            for body in self.perts['n_bodies']:
+                if body['spice_file'] not in self.spice_files_loaded:
+                    spice.furnsh(body['spice_file'])
+                    self.spice_files_loaded.append(body['spice_file'])
+                
+                body['states'] = st.get_ephemeris_data(body['name'],self.spice_tspan, self.frame,cb['name'])
+
+            # Check for custom thrust function
+            if self.perts['custom_thrust_function']:
+                self.thrust_func = self.perts['custom_thrust_function']
+            else:
+                if self.perts['thrust']:
+                    self.thrust_func = self.default_thrust_func
+
+
+            
+
         if 'deorbit_altitude' in sc.keys():
             self.stop_conditions_dict['deorbit_altitude'] = sc['deorbit_altitude']
         else:
@@ -103,7 +153,7 @@ class OrbitPropogator:
     
     # check if spacecraft has deorbited
     def check_deorbit(self):
-        if self.alts[self.step] < max(self.stop_conditions_dict['deorbit_altitude'],0):
+        if self.alts[self.step] < self.stop_conditions_dict['deorbit_altitude']:
             print('Spacecraft deorbited after %.1f seconds' % self.ts[self.step])
             return False
         return True
@@ -200,25 +250,67 @@ class OrbitPropogator:
             # Thrust vector
 
             #                                        e_              kg*m/s^2  kg      m/km         
-            a += self.perts['thrust_direction']*ot.unit(v)*self.perts['thrust']/mass/1000.0 # km/s^2
-
+            # a += self.perts['thrust_direction']*ot.unit(v)*self.perts['thrust']/mass/1000.0 # km/s^2
+            a += self.thrust_func(t,y,self.perts['thrust'])
             # derivative of total mass
             # kg/s       kg*m/s^2          s              m/s^2
             dmdt = -self.perts['thrust']/self.perts['isp']/9.81
+
+        for body in self.perts['n_bodies']:
+
+            # from central body to n body
+            r_cb2nb =  body['states'][self.step,:3]
+            
+            # from sat to n body
+            r_sat2body = r_cb2nb - r
+            
+
+            a += body['mu'] * (r_sat2body/ot.norm(r_sat2body)**3 - r_cb2nb/ot.norm(r_cb2nb)**3)
+
+        if self.perts['srp']:
+
+            # from sun to spacecraft
+            r_sun2sc = self.cb['states'][self.step,:3] + r
+
+            # srp vector from given ephemeris data
+            a += (1+self.perts['CR'])*pd.sun['G1']*self.perts['A_srp']/mass/ot.norm(r_sun2sc)**3*r_sun2sc
 
 
         return [vx,vy,vz,a[0],a[1],a[2],dmdt]
   
     # Calculates classical orbital elements over time (DEGREES BY DEFAULT)
-    def calculate_coes(self,degrees=True,print_results=False):
+    def calculate_coes(self,degrees=True,print_results=False,parallel=False):
         print('Calculating COEs...')
         
+        if parallel:
+            start=time()
+            states = ot.parallel_states(self.y)
+            pool=Pool()
+            self.coes = np.array(pool.starmap(ot.rv2coes,states))
+            self.coes_rel = self.coes - self.coes[0,:]
+            print(time()-start)
+        else:
+            start=time()
+
+            # preallocate arrays for coes
+            self.coes = np.zeros((self.step,6))
+            self.coes_rel = np.zeros((self.step,6))
+
+            # fill array
+            for n in range(self.step):
+                self.coes[n,:] = ot.rv2coes(self.y[n,:6], mu=self.cb['mu'],deg=degrees,print_results=print_results)
+
+            self.coes_rel = self.coes - self.coes[0,:]
+
+            print(time()-start, 's')
+
+
         # [0,0,0,0,0,0]
-        self.coes = np.zeros((self.stop_step,6))
+        # self.coes = np.zeros((self.stop_step,6))
         # print(size(self.rs))
-        for n in range(self.stop_step):
+        # for n in range(self.stop_step):
             #                              [row n]      [row n]        
-            self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degrees,print_results=print_results)
+            # self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degrees,print_results=print_results)
 
     def calculate_apoapse_periapse(self):
         # define empty arrays
@@ -273,7 +365,7 @@ class OrbitPropogator:
             plt.savefig(title+'.png',dpi=dpi) 
 
     # Plot classical orbital elements over time
-    def plot_coes(self, hours=False, days=False, show_plot=False, save_plot=False, title='COEs',figsize=(20,10),dpi=500):
+    def plot_coes(self, hours=False, days=False, show_plot=False, save_plot=False, title='COEs',figsize=(20,10),dpi=500,full_angles=False):
         print("Plotting COEs...")
 
         # Create figure and axes instances
@@ -301,7 +393,8 @@ class OrbitPropogator:
         axs[0,0].grid(True)
         axs[0,0].set_ylabel("Angle (\u00B0)")
         axs[0,0].set_xlabel(xlabel)
-        axs[0,0].set_ylim([-5,365])
+        if full_angles:
+            axs[0,0].set_ylim([-5,365])
         
 
         # Plot semi major axis
@@ -324,7 +417,8 @@ class OrbitPropogator:
         axs[0,2].grid(True)
         axs[0,2].set_ylabel("Argument of Periapse (\u00B0)")
         axs[0,2].set_xlabel(xlabel)
-        axs[0,2].set_ylim([-5,365])
+        if full_angles:
+            axs[0,2].set_ylim([-5,365])
 
         # Plot Inclination
         axs[1,1].plot(ts, self.coes[:,2])
@@ -332,7 +426,8 @@ class OrbitPropogator:
         axs[1,1].grid(True)
         axs[1,1].set_ylabel("Inclination (\u00B0)")
         axs[1,1].set_xlabel(xlabel)
-        axs[1,1].set_ylim([-5,365])
+        if full_angles:
+            axs[1,1].set_ylim([-5,365])
 
         # Plot RAAN
         axs[1,2].plot(ts, self.coes[:,5])
@@ -340,7 +435,8 @@ class OrbitPropogator:
         axs[1,2].grid(True)
         axs[1,2].set_ylabel("RAAN (\u00B0)")
         axs[1,2].set_xlabel(xlabel)
-        axs[1,2].set_ylim([-5,365])
+        if full_angles:
+            axs[1,2].set_ylim([-5,365])
 
         
 

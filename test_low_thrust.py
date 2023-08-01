@@ -26,7 +26,7 @@ if __name__ == '__main__':
     perts = null_perts()
     perts['thrust'] = 0.327 # N
     perts['isp'] = 4300 # s
-    perts['thrust_direction'] = 1
+    perts['thrust_direction'] = -1
     
     mass0 = 10.0 # kg
 
@@ -61,6 +61,7 @@ if __name__ == '__main__':
     op.plot_coes(show_plot=True,hours=True)
     op.calculate_apoapse_periapse()
     op.plot_apoapse_periapse(show_plot=True,hours=True)
+    op.plot_alts(show_plot=True)
 
     # plt.hist(op.periapses)
     
