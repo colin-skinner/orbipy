@@ -15,9 +15,9 @@ def calc_atmospheric_density(z):
     rhos,zs = find_rho_z(z)
     if rhos[0] == 0:
         return 0.0
-    
+    # print(rhos[0])
     Hi = -(zs[1]-zs[0])/m.log(rhos[1]/rhos[0])
-
+    
     return rhos[0]*m.exp(-(z-zs[0])/Hi)
 
 # Find endpoints of altitude and density surrounding input altitude

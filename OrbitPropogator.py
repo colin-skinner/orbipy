@@ -10,67 +10,95 @@ import AtmosphericTools as at
 
 def null_perts():
     return {
-        'oblateness':False,
         'aero':False,
-        'moon_grav':False,
-        'solar_grav':False,
+        'Cd':0,
+        'A':0,
+        'mu':0,
+        'third_bodies':[],
+        'srp':False,
+        'srp_custom_func':False,
+        'CR':0,
+        'B':0,
+        'oblateness':False,
+        'J3':0,
+        'J4':0,
+        'J5':0,
+        'J6':0,
+        'J7':0,
+        'relativity':0,
+        'thrust':0,
+        'thrust_direction':0,
+        'isp':0,
+        'rho':0,
+        'C20':0,
+        'custom_pert':False
+        
     }
 
 class OrbitPropogator:
-    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts()):
+    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts(),prop_print=False,propagator='lsoda'):
         if coes:
             self.r0, self.v0 = ot.coes2rv(state0,deg=deg,mu=cb['mu'])
         else:
             self.r0 = state0[:3]
             self.v0 = state0[3:6]
-        
-        self.y0 = self.r0.tolist() + self.v0.tolist()
+
+       
         self.tspan = tspan
         self.dt = dt 
         self.cb = cb
-        self.mass = mass0
+        self.mass0 = mass0
 
 
         if type(tspan)==str:
-            self.tspan = float(tspan)*ot.rv2period(self.r0,self.v0,self.cb)
+            self.tspan = float(tspan)*ot.rv2period(self.r0,self.v0,self.cb['mu'])
+        else:
+            self.tspan = tspan
 
         self.n_steps = int(np.ceil(self.tspan/self.dt))
 
         # initial conditions
         self.ts = np.zeros((self.n_steps,1)) # time array
-        self.ys = np.zeros((self.n_steps,6)) # 3D position, 3D velocity
-        self.ts[0] = 0
-        self.ys[0,:] = self.y0
-        self.step = 1
+        self.ys = np.zeros((self.n_steps,7)) # 3D position, 3D velocity
+        # self.ts[0] = 0
+        # self.ys[0,:] = self.y0
+        self.step = 0
+        # self.dd = np.zeros((self.n_steps,1))
 
+        self.y0 = self.r0.tolist() + self.v0.tolist() + [self.mass0]
+        # print(self.y0)
         # initiate solver
         self.solver = ode(self.diffy_q)
-        self.solver.set_integrator('lsoda')
+        self.solver.set_integrator(propagator)
         self.solver.set_initial_value(self.y0,0)
-
+        self.propagator = propagator
         # define perturbations dictionary
         self.perts = perts
 
         if propogate:
-            self.propogate_orbit()
+            self.propogate_orbit(prop_print=prop_print)
     
-    def propogate_orbit(self):
+    def propogate_orbit(self,prop_print=False):
 
         while self.solver.successful() and self.step<self.n_steps:
             self.solver.integrate(self.solver.t+self.dt)
             self.ts[self.step]=self.solver.t
             self.ys[self.step]=self.solver.y
+            if prop_print:
+                print(self.ys[self.step])
             self.step+=1
-
+            
+        
         self.rs=self.ys[:,:3]
-        self.vs=self.ys[:,3:]
-        self.alts=(np.linalg.norm(self.rs,axis=1) - self.cb['radius']).reshape((self.n_steps,1))
+        self.vs=self.ys[:,3:6]
+
+        self.alts=(ot.norm(self.rs,axis=1) - self.cb['radius']).reshape((self.n_steps,1))
         # print(len(self.alts))
         # self.alts
 
     def diffy_q(self,t,y):
         # unpack components from the "state" y
-        rx, ry, rz, vx, vy, vz = y
+        rx, ry, rz, vx, vy, vz, mass = y
         r = np.array([rx,ry,rz])
         v = np.array([vx,vy,vz])
 
@@ -79,7 +107,8 @@ class OrbitPropogator:
 
         # two-body acceleration
 
-        a = -r*self.cb['mu']/norm_r**3 # this is a 3D vector
+        a = -r*self.cb['mu']/norm_r**3 # 3D vector with [km/s^2]
+        dmdt=0 # by default
 
         # For J2 Perturbation
         if (self.perts['oblateness']):
@@ -88,37 +117,100 @@ class OrbitPropogator:
             tx = r[0]/norm_r * (5*z2/r2-1)
             ty = r[1]/norm_r * (5*z2/r2-1)
             tz = r[2]/norm_r * (5*z2/r2-3)
+            # https://www.vcalc.com/wiki/eng/J2+Perturbation+Acceleration
+            a += 1.5*self.cb['J2']*self.cb['mu']*self.cb['radius']**2/(norm_r**4)*np.array([tx,ty,tz])
+
+        # IN PROGRESS - For aerodynamic drag
+        # if self.perts['aero']:
+        #     # calculate altitude and air density
+        #     z = norm_r - self.cb['radius']
+        #     rho = at.calc_atmospheric_density(z)
             
-            a += 1.5*self.cb['J2']*self.cb['mu']*self.cb['radius']**2/norm_r**4*np.array([tx,ty,tz])
+        #     # calculate motion of s/c with respect to a rotating atmosphere
+        #     v_rel = v - np.cross(self.cb['atm_rot_vector'],r)
 
-        # For aerodynamic drag
-        if self.perts['aero']:
-            # calculate altitude and air density
-            z = norm_r - self.cb['radius']
-            rho = at.calc_atmospheric_density(z)
+        #     drag = -v_rel*0.5*rho*ot.norm(v_rel)*self.perts['Cd']*self.perts['A']/self.mass0
+        #     # print('z: ',z,' rho: ',rho,'drag: ',ot.norm(drag))
+        #     a+=drag
 
-            # calculate motion of s/c with respect to a rotating atmosphere
-            v_rel = v - np.cross(self.cb['atm_rot_vector'],r)
+        # Thrust perturbation
+        if self.perts['thrust']:
+            # Thrust vector
 
-            drag = -v_rel*0.5*rho*ot.norm(v_rel)*self.perts['Cd']*self.perts['A']/self.mass
-            
-            a+=drag
+            #                                        e_              kg*m/s^2  kg      m/km         
+            a += self.perts['thrust_direction']*ot.unit(v)*self.perts['thrust']/mass/1000.0 # km/s^2
 
-            
-            
+            # derivative of total mass
+            # kg/s       kg*m/s^2          s              m/s^2
+            dmdt = -self.perts['thrust']/self.perts['isp']/9.81
 
-        
 
-        return [v[0],v[1],v[2],a[0],a[1],a[2]]
+        return [vx,vy,vz,a[0],a[1],a[2],dmdt]
   
-    def calculate_coes(self,degree=True,print_results=False):
+    # Calculates classical orbital elements over time (DEGREES BY DEFAULT)
+    def calculate_coes(self,degrees=True,print_results=False):
         print('Calculating COEs...')
-
+        
+        # [0,0,0,0,0,0]
         self.coes = np.zeros((self.n_steps,6))
-
+        # print(size(self.rs))
         for n in range(self.n_steps):
-            self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degree,print_results=print_results)
+            #                              [row n]      [row n]        
+            self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degrees,print_results=print_results)
 
+    def calculate_apoapse_periapse(self):
+        # define empty arrays
+        #    km                km 
+        self.apoapses = self.coes[:,0]*(1+self.coes[:,1])
+        self.periapses = self.coes[:,0]*(1-self.coes[:,1])
+
+
+    def calculate_Esp(self):
+        print('Calculating Esp...')
+
+        self.Esp = np.zeros((self.n_steps,1))
+        for n in range(self.n_steps):
+            self.Esp[n,:] = ot.rv2energy(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'])
+
+
+#### Plotting Functions (TAKES IN DEGREES) ####
+
+    # Plot apoapse and periapse over tme
+    def plot_apoapse_periapse(self,  hours=False, days=False, show_plot=False, save_plot=False, title='Apoapse and Periapse',figsize=(20,10),dpi=500):
+
+        plt.figure(figsize=figsize)
+
+        # X axis
+        if hours:
+            ts = self.ts / 3600.0
+            xlabel = "Time Elapsed (hours)"
+        elif days:
+            ts = self.ts / 3600.0 / 24.0
+            xlabel = "Time Elapsed (days)"
+        else:
+            ts = self.ts
+            xlabel = "Time Elapsed (s)"
+        
+        # Plot each
+        plt.plot(ts, self.apoapses, 'b', label='Apoapse')
+        # plt.plot(ts, self.periapses, 'r', label='Periapse')
+
+        # labels
+        plt.ylabel("Altitude (km)")
+        plt.xlabel(xlabel)
+        # plt.ylim([0,max(self.apoapses)])
+
+        # other parameters
+        plt.grid(True)
+        plt.title(title)
+        plt.legend()
+
+        if show_plot:
+            plt.show()
+        if save_plot:
+            plt.savefig(title+'.png',dpi=dpi) 
+
+    # Plot classical orbital elements over time
     def plot_coes(self, hours=False, days=False, show_plot=False, save_plot=False, title='COEs',figsize=(20,10),dpi=500):
         print("Plotting COEs...")
 
@@ -139,7 +231,7 @@ class OrbitPropogator:
             ts = self.ts
             xlabel = "Time Elapsed (s)"
         
-        # [a,e_norm,i*R2D,ta*R2D,aop*R2D,raan*R2D]
+        # [a,e,i*R2D,ta*R2D,aop*R2D,raan*R2D]
 
         # Plot true anomaly
         axs[0,0].plot(ts, self.coes[:,3])
@@ -147,6 +239,7 @@ class OrbitPropogator:
         axs[0,0].grid(True)
         axs[0,0].set_ylabel("Angle (\u00B0)")
         axs[0,0].set_xlabel(xlabel)
+        
 
         # Plot semi major axis
         axs[1,0].plot(ts, self.coes[:,0])
@@ -190,44 +283,6 @@ class OrbitPropogator:
         if save_plot:
             plt.savefig(title+'.png',dpi=dpi) 
 
-    def calculate_apoapse_periapse(self):
-        # define empty arrays
-        self.apoapses = self.coes[:,0]*(1+self.coes[:,1])
-        self.periapses = self.coes[:,0]*(1-self.coes[:,1])
-
-    def plot_apoapse_periapse(self,  hours=False, days=False, show_plot=False, save_plot=False, title='Apoapse and Periapse',figsize=(20,10),dpi=500):
-
-        plt.figure(figsize=figsize)
-
-        # X axis
-        if hours:
-            ts = self.ts / 3600.0
-            xlabel = "Time Elapsed (hours)"
-        elif days:
-            ts = self.ts / 3600.0 / 24.0
-            xlabel = "Time Elapsed (days)"
-        else:
-            ts = self.ts
-            xlabel = "Time Elapsed (s)"
-        
-        # Plot each
-        plt.plot(ts, self.apoapses, 'b', label='Apoapse')
-        plt.plot(ts, self.periapses, 'r', label='Periapse')
-
-        # labels
-        plt.ylabel("Altitude (km)")
-        plt.xlabel(xlabel)
-        
-        # other parameters
-        plt.grid(True)
-        plt.title(title)
-        plt.legend()
-
-        if show_plot:
-            plt.show()
-        if save_plot:
-            plt.savefig(title+'.png',dpi=dpi) 
-
     # Plot altitude over time
     def plot_alts(self, hours=False, days=False, show_plot=False, save_plot=False, title='Radial Distance vs. Time',figsize=(20,10),dpi=500):
 
@@ -257,7 +312,7 @@ class OrbitPropogator:
         if save_plot:
             plt.savefig(title+'.png',dpi=dpi) 
 
-
+    # Plot trajectory in 3D
     def plot_3d(self,show_plot=False,save_plot=False,title="Test Title",set_pad=10,show_body=True):
 
         # 3d plot
@@ -326,8 +381,35 @@ class OrbitPropogator:
         if save_plot:
             plt.savefig(title+'.png',dpi=300) # 300 dots per inch
 
+    # Plot mechanical energy over time
+    def plot_Esp(self, hours=False, days=False, show_plot=False, save_plot=False, title='Specific Energy vs. Time',figsize=(20,10),dpi=500):
+
+        plt.figure(figsize=figsize)
+
+        # X axis
+        if hours:
+            ts = self.ts / 3600.0
+            xlabel = "Time Elapsed (hours)"
+        elif days:
+            ts = self.ts / 3600.0 / 24.0
+            xlabel = "Time Elapsed (days)"
+        else:
+            ts = self.ts
+            xlabel = "Time Elapsed (s)"
+        
+        plt.plot(ts,self.Esp,'w')
+        plt.grid(True)
+        plt.ylabel("Energy (km^2/s^2)")
+        plt.xlabel(xlabel)
+        plt.ylim([min(self.Esp-3),0])
+
+        plt.title(title)
 
 
+        if show_plot:
+            plt.show()
+        if save_plot:
+            plt.savefig(title+'.png',dpi=dpi) 
 
 
 

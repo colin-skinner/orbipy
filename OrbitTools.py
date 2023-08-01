@@ -7,12 +7,25 @@ import math as m
 import datetime
 import AtmosphericTools as at
 
-D2R = np.pi/180
-R2D = 180/np.pi
+D2R = np.pi/180 # rad/deg
+R2D = 180/np.pi # deg/rad
 
-def norm(v):
-    return np.linalg.norm(v)
+########################
+# Functions
+def norm(v,axis=None):
+    return np.linalg.norm(v,axis=axis)
 
+def unit(v):
+    return np.array(v)/norm(v)
+
+def sqrt(a):
+    return np.sqrt(a)
+
+##### Principal rotation matrcices ####
+# Input angles must be in radians
+
+
+# Plots many orbits around a central body
 def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False,save_plot=False,title="Many Orbits",set_pad=10,show_body=True):
 
     # 3d plot
@@ -100,15 +113,18 @@ def plot_n_orbits(rs,labels,colors=['w','w','w','w'],cb=pd.earth,show_plot=False
 
 # Converts classical orbital elements to r and v vectors
 def coes2rv(coes, deg=False, mu=pd.earth['mu']):
-    a,e,i,ta,aop,raan = coes
+#  km  .  r/d  -   -   - 
+    a, e, i, ta, aop, raan = coes
     if deg:
         i*=D2R
         ta*=D2R
         aop*=D2R
         raan*=D2R
 
+    # rad           true anomaly and eccentricity
     E = ecc_anomaly([ta,e],'tae')
 
+    # km    km                
     r_norm = a*(1-e**2)/(1+e*np.cos(ta))
 
     # Calc r and v vectorals in perifocal form
@@ -202,7 +218,7 @@ def ecc_anomaly(arr, method, tol=1e-8):
         return 2*m.atan(m.sqrt((1-e)/(1+e))*m.tan(ta/2.0))
     else:
         print("Invalid method for eccentric anomaly")
-
+    
 # Takes text file containing TLE and returns classical orbital elements and a few other parameters
 def tle2coes(tle_filename, mu=pd.earth['mu'],deg = True,return_date=False):
     # read the file
@@ -287,3 +303,6 @@ def rv2period(r, v, mu = pd.earth['mu']):
 
     # period
     return 2*np.pi*m.sqrt(a**3/mu)
+
+def rv2energy(r, v, mu = pd.earth['mu']):
+    return (norm(v)**2/2.0 - mu/norm(r))

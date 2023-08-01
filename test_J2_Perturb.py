@@ -24,16 +24,16 @@ dt = 100.0
 if __name__ == '__main__':
 
     perts = null_perts()
-    perts['J2'] = True
+    perts['oblateness'] = True
     
 
     
     r0 = np.array([-2384.46, 5729.01, 3050.46])
     v0 = np.array([-7.36138, -2.98997, 1.64354])
     # state0 = np.array(t.rv2coes(r0,v0,print_results=True,deg=True))
-    # state0 = np.array([cb['radius']+600,0.1,63.435,0.0,0.0,0.0])
+    state0 = np.array([cb['radius']+600,0.1,63.435,0.0,0.0,0.0])
     # state0 = np.array([cb['radius']+600,0.1,90.01,0.0,0.0,0.0])
-    state0 = t.tle2coes('.\SatData\ISS.txt',deg=True)
+    # state0 = t.tle2coes('.\SatData\ISS.txt',deg=True)
 
 
 
