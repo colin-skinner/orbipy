@@ -36,7 +36,8 @@ def null_perts():
     }
 
 class OrbitPropogator:
-    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts(),prop_print=False,propagator='lsoda'):
+    def __init__(self,state0,tspan,dt,mass0=10.0,coes=False,deg=True,cb=pd.earth,propogate=True,perts=null_perts(),prop_print=False,propagator='lsoda',sc={}):
+        # Check if initial state is classical orbital elements (COEs) or r and v vectors
         if coes:
             self.r0, self.v0 = ot.coes2rv(state0,deg=deg,mu=cb['mu'])
         else:
@@ -50,51 +51,112 @@ class OrbitPropogator:
         self.mass0 = mass0
 
 
+        # Check if timespan is one period of custom amount of seconds
         if type(tspan)==str:
             self.tspan = float(tspan)*ot.rv2period(self.r0,self.v0,self.cb['mu'])
         else:
             self.tspan = tspan
 
+        # misc parameters
         self.n_steps = int(np.ceil(self.tspan/self.dt))
 
         # initial conditions
-        self.ts = np.zeros((self.n_steps,1)) # time array
-        self.ys = np.zeros((self.n_steps,7)) # 3D position, 3D velocity
-        # self.ts[0] = 0
-        # self.ys[0,:] = self.y0
+        self.ts = np.zeros((self.n_steps+1,1)) # time array
+        self.y = np.zeros((self.n_steps+1,7)) # 3D position, 3D velocity
+        self.alts = np.zeros((self.n_steps+1))
+        self.propagator = propagator
         self.step = 0
-        # self.dd = np.zeros((self.n_steps,1))
+        
+        # Initial Conditions
+        self.y[0,:] = self.r0.tolist() + self.v0.tolist() + [self.mass0]
+        self.alts[0] = ot.norm(self.r0) - self.cb['radius']
 
-        self.y0 = self.r0.tolist() + self.v0.tolist() + [self.mass0]
-        # print(self.y0)
         # initiate solver
         self.solver = ode(self.diffy_q)
         self.solver.set_integrator(propagator)
-        self.solver.set_initial_value(self.y0,0)
-        self.propagator = propagator
+        self.solver.set_initial_value(self.y[0,:],0)
+        
         # define perturbations dictionary
         self.perts = perts
+
+        # store stop conditions dictionary
+        self.stop_conditions_dict = sc
+        
+        print(self.stop_conditions_dict)
+        # define dictionary to map internal methods
+        self.stop_conditions_map = {'max_alt':self.check_max_alt,'min_alt':self.check_min_alt}
+
+        # create stop condition function list with deorbit always checked, can add more stop functions
+        self.stop_condition_functions = [self.check_deorbit]
+
+        for key in self.stop_conditions_dict.keys():
+            if not key == 'deorbit_altitude':
+                self.stop_condition_functions.append(self.stop_conditions_map[key])
+        
+        if 'deorbit_altitude' in sc.keys():
+            self.stop_conditions_dict['deorbit_altitude'] = sc['deorbit_altitude']
+        else:
+            self.stop_conditions_dict['deorbit_altitude'] = 0.0
 
         if propogate:
             self.propogate_orbit(prop_print=prop_print)
     
+    # check if spacecraft has deorbited
+    def check_deorbit(self):
+        if self.alts[self.step] < max(self.stop_conditions_dict['deorbit_altitude'],0):
+            print('Spacecraft deorbited after %.1f seconds' % self.ts[self.step])
+            return False
+        return True
+
+    # check if max altitude exceeded
+    def check_max_alt(self):
+
+        if self.alts[self.step] > self.stop_conditions_dict['max_alt']:
+            print('Spacecraft reached maximum altitude after %.1f seconds' % self.ts[self.step])
+            return False
+        return True
+
+    # check if min altitude exceeced
+    def check_min_alt(self):
+        if self.alts[self.step] < self.stop_conditions_dict['min_alt']:
+            print('Spacecraft reached minimum altitude after %.1f seconds' % self.ts[self.step])
+            return False
+        return True
+
+    # function called each time step to check stop conditions
+    def check_stop_conditions(self):
+
+        for sc in self.stop_condition_functions:
+
+            if not sc():
+                return False
+        
+        # None of the stop functions returned false
+        return True
+    
     def propogate_orbit(self,prop_print=False):
 
-        while self.solver.successful() and self.step<self.n_steps:
+        while self.solver.successful() and self.step<self.n_steps and self.check_stop_conditions():
+            # integrate step
             self.solver.integrate(self.solver.t+self.dt)
-            self.ts[self.step]=self.solver.t
-            self.ys[self.step]=self.solver.y
-            if prop_print:
-                print(self.ys[self.step])
             self.step+=1
-            
-        
-        self.rs=self.ys[:,:3]
-        self.vs=self.ys[:,3:6]
 
-        self.alts=(ot.norm(self.rs,axis=1) - self.cb['radius']).reshape((self.n_steps,1))
-        # print(len(self.alts))
-        # self.alts
+            self.ts[self.step]=self.solver.t
+            self.y[self.step]=self.solver.y
+            if prop_print:
+                print(self.y[self.step])
+
+            self.alts[self.step] = ot.norm(self.solver.y[:3]) - self.cb['radius']
+            
+            
+        # extract arrays at the step where propogation stopped
+        self.ts = self.ts[:self.step]
+        self.rs=self.y[:self.step,:3]
+        self.vs=self.y[:self.step,3:6]
+        self.masses = self.y[:self.step,6]
+        self.alts = self.alts[:self.step]
+
+        self.stop_step = self.step
 
     def diffy_q(self,t,y):
         # unpack components from the "state" y
@@ -152,9 +214,9 @@ class OrbitPropogator:
         print('Calculating COEs...')
         
         # [0,0,0,0,0,0]
-        self.coes = np.zeros((self.n_steps,6))
+        self.coes = np.zeros((self.stop_step,6))
         # print(size(self.rs))
-        for n in range(self.n_steps):
+        for n in range(self.stop_step):
             #                              [row n]      [row n]        
             self.coes[n,:] = ot.rv2coes(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'],deg=degrees,print_results=print_results)
 
@@ -168,8 +230,8 @@ class OrbitPropogator:
     def calculate_Esp(self):
         print('Calculating Esp...')
 
-        self.Esp = np.zeros((self.n_steps,1))
-        for n in range(self.n_steps):
+        self.Esp = np.zeros((self.stop_step,1))
+        for n in range(self.stop_step):
             self.Esp[n,:] = ot.rv2energy(self.rs[n,:], self.vs[n,:], mu=self.cb['mu'])
 
 
@@ -239,6 +301,7 @@ class OrbitPropogator:
         axs[0,0].grid(True)
         axs[0,0].set_ylabel("Angle (\u00B0)")
         axs[0,0].set_xlabel(xlabel)
+        axs[0,0].set_ylim([-5,365])
         
 
         # Plot semi major axis
@@ -261,6 +324,7 @@ class OrbitPropogator:
         axs[0,2].grid(True)
         axs[0,2].set_ylabel("Argument of Periapse (\u00B0)")
         axs[0,2].set_xlabel(xlabel)
+        axs[0,2].set_ylim([-5,365])
 
         # Plot Inclination
         axs[1,1].plot(ts, self.coes[:,2])
@@ -268,6 +332,7 @@ class OrbitPropogator:
         axs[1,1].grid(True)
         axs[1,1].set_ylabel("Inclination (\u00B0)")
         axs[1,1].set_xlabel(xlabel)
+        axs[1,1].set_ylim([-5,365])
 
         # Plot RAAN
         axs[1,2].plot(ts, self.coes[:,5])
@@ -275,6 +340,7 @@ class OrbitPropogator:
         axs[1,2].grid(True)
         axs[1,2].set_ylabel("RAAN (\u00B0)")
         axs[1,2].set_xlabel(xlabel)
+        axs[1,2].set_ylim([-5,365])
 
         
 
@@ -284,7 +350,7 @@ class OrbitPropogator:
             plt.savefig(title+'.png',dpi=dpi) 
 
     # Plot altitude over time
-    def plot_alts(self, hours=False, days=False, show_plot=False, save_plot=False, title='Radial Distance vs. Time',figsize=(20,10),dpi=500):
+    def plot_alts(self, hours=False, days=False, show_plot=False, save_plot=False, title='Altitude vs. Time',figsize=(20,10),dpi=500):
 
         plt.figure(figsize=figsize)
 
